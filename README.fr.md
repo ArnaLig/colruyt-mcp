@@ -15,7 +15,7 @@ annulation sont bloqués dans le client. Vous terminez vous-même sur collectand
 
 ## Installation
 
-Prérequis : Windows, Microsoft Edge, [uv](https://docs.astral.sh/uv/).
+Prérequis : Windows ou Linux, avec Google Chrome, Microsoft Edge ou Chromium, et [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
@@ -23,7 +23,7 @@ uv sync
 
 ## Connexion
 
-Le site bloque les navigateurs automatisés. La connexion se fait donc dans un Edge **normal**,
+Le site bloque les navigateurs automatisés. La connexion se fait donc dans un navigateur **normal**,
 avec un profil dédié. Le MCP ne voit jamais vos identifiants : il lit seulement les cookies une
 fois que vous êtes connecté.
 
@@ -31,7 +31,7 @@ fois que vous êtes connecté.
 uv run colruyt-mcp login
 ```
 
-1. Edge s'ouvre sur les pages de connexion colruyt.be et Collect&Go.
+1. Le navigateur s'ouvre sur les pages de connexion colruyt.be et Collect&Go.
 2. Connectez-vous dans les deux onglets (code SMS). Cochez « rester connecté » si c'est proposé.
 3. Appuyez sur Entrée dans le terminal.
 
@@ -45,11 +45,38 @@ uv run colruyt-mcp status
 uv run colruyt-mcp refresh
 ```
 
-`status` vérifie les deux sessions. `refresh` tente une reconnexion silencieuse : il ouvre
-brièvement Edge et réutilise la connexion unique (SSO) Azure B2C si elle est encore valide.
+`status` vérifie les deux sessions. `refresh` tente une reconnexion silencieuse : il rouvre
+brièvement le navigateur du login et réutilise la connexion unique (SSO) Azure B2C si elle est encore valide.
 
 Fichiers personnels (hors dépôt) dans `~/.colruyt-mcp/`, ou `COLRUYT_MCP_HOME` :
-`cookies.json` et `edge-profile/`.
+`cookies.json`, `browser.json` et `<navigateur>-profile/`.
+
+### Choix du navigateur
+
+Sans précision, l'outil cherche Edge, puis Chrome, puis Chromium sous Windows. Sous Linux, il
+cherche `google-chrome`, puis `chromium`, puis `microsoft-edge`. Pour en imposer un :
+
+```bash
+uv run colruyt-mcp login --browser chrome
+```
+
+`--browser` accepte `chrome`, `edge`, `chromium` ou le chemin de l'exécutable. La variable
+d'environnement `COLRUYT_MCP_BROWSER` fait la même chose. Le navigateur utilisé au login est
+mémorisé : `refresh` le réutilise, avec le même profil.
+
+- Chaque navigateur a son propre profil : changer de navigateur impose de se reconnecter.
+- Fermez toute fenêtre qui utilise déjà le profil colruyt-mcp avant `login` ou `refresh`.
+- Linux avec Chromium en snap : le confinement snap masque les dossiers cachés du répertoire
+  personnel. Définissez `COLRUYT_MCP_HOME` sur un dossier non caché (par exemple
+  `~/colruyt-mcp-data`), ou utilisez Google Chrome en `.deb`.
+
+### Durée des sessions
+
+La session Collect&Go expire après une période d'inactivité (environ une demi-heure lors de nos
+tests). La session colruyt.be dure bien plus longtemps. Quand une session a expiré, l'assistant
+appelle `refresh_session` : le navigateur se rouvre quelques secondes et se reconnecte par
+l'authentification unique, sans nouveau code SMS, tant que cette authentification unique est
+encore valide.
 
 ## Brancher le MCP
 
@@ -59,7 +86,8 @@ Claude Code :
 claude mcp add colruyt -- uv run --directory C:\chemin\vers\colruyt-mcp colruyt-mcp
 ```
 
-Claude Desktop (`claude_desktop_config.json`) :
+Claude Desktop (`claude_desktop_config.json`). Sous Linux, mettez le chemin complet de `uv`
+(par exemple `/home/<vous>/.local/bin/uv`) et un chemin Linux pour `--directory` :
 
 ```json
 {

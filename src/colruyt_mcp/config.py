@@ -3,18 +3,14 @@ import os
 from pathlib import Path
 
 HOME = Path(os.environ.get("COLRUYT_MCP_HOME", Path.home() / ".colruyt-mcp"))
-PROFILE_DIR = HOME / "edge-profile"
 COOKIES_FILE = HOME / "cookies.json"
+BROWSER_FILE = HOME / "browser.json"  # browser used at login + its real User-Agent
 
 LANG = os.environ.get("COLRUYT_MCP_LANG", "fr")
 COGO_LANG_ID = {"fr": "-2", "nl": "-1001"}
 
-EDGE_CANDIDATES = [
-    os.environ.get("COLRUYT_MCP_BROWSER", ""),
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-]
-
+# Fallback only: the client replays the User-Agent of the browser used at login (browser.json),
+# so that API calls look like the session's own browser.
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"

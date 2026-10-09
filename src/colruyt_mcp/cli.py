@@ -9,13 +9,16 @@ from .session import CookieStore, interactive_login, silent_refresh
 def main() -> None:
     parser = argparse.ArgumentParser(prog="colruyt-mcp")
     parser.add_argument("command", nargs="?", default="serve", choices=["serve", "login", "refresh", "status"])
-    cmd = parser.parse_args().command
+    parser.add_argument("--browser", help="login: edge | chrome | chromium | chemin de l'exécutable "
+                                          "(par défaut : celui du dernier login, sinon détection automatique)")
+    args = parser.parse_args()
+    cmd = args.command
     store = CookieStore()
     if cmd == "serve":
         from .server import main as serve
         serve()
     elif cmd == "login":
-        print(json.dumps(interactive_login(store), indent=1, ensure_ascii=False))
+        print(json.dumps(interactive_login(store, args.browser), indent=1, ensure_ascii=False))
     elif cmd == "refresh":
         print(json.dumps(silent_refresh(store), indent=1, ensure_ascii=False))
     else:

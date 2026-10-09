@@ -1,8 +1,6 @@
-"""Browser-backed session: the user logs in by hand in a plain Edge, we only read cookies.
-
-Imperva blacklists automated browsers (Playwright's launch sets navigator.webdriver), so Edge
-is started as an ordinary process and CDP is attached only once, at the end, to read cookies.
-Credentials are never read, typed or stored.
+"""Browser-backed session: the user logs in by hand in a regular browser (Edge, Chrome or
+Chromium, see browser.py); we only read cookies afterwards. Credentials are never read, typed
+or stored.
 """
 import json
 import re
@@ -13,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config
+from . import browser, config
 
 COLRUYT_DOMAINS = ("colruyt.be", "collectandgo.be", "colruytgroup.com", "myxtra.be", "dcsecosystem.be")
 # Only session cookies are replayed. In particular never send `reese84`: the browser renews it
@@ -75,65 +73,47 @@ class CookieStore:
         }
 
 
-def _edge_path() -> str:
-    for p in config.EDGE_CANDIDATES:
-        if p and Path(p).exists():
-            return p
-    raise RuntimeError("Microsoft Edge introuvable (définissez COLRUYT_MCP_BROWSER).")
-
-
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
-def launch_edge(urls: list[str], port: int, minimized: bool = False) -> subprocess.Popen:
-    config.PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    args = [
-        _edge_path(),
-        f"--user-data-dir={config.PROFILE_DIR}",
-        f"--remote-debugging-port={port}",
-        "--remote-debugging-address=127.0.0.1",
-        "--no-first-run",
-        "--restore-last-session",
-        "--new-window",
-    ]
-    if minimized:
-        args.append("--start-minimized")
-    return subprocess.Popen(args + urls)
+def _stop(proc: subprocess.Popen) -> None:
+    try:
+        proc.wait(timeout=5)  # Browser.close already sent: usually exits by itself
+    except subprocess.TimeoutExpired:
+        proc.terminate()
 
 
-def read_cookies_over_cdp(port: int) -> list[dict]:
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
-        cookies = browser.contexts[0].cookies()
-        browser.close()  # only disconnects
-    return cookies
-
-
-def interactive_login(store: CookieStore) -> dict:
+def interactive_login(store: CookieStore, preference: str | None = None) -> dict:
     """CLI flow: open both login pages, the user logs in, presses Enter, cookies are saved."""
+    b = browser.find_browser(preference)
     port = _free_port()
-    proc = launch_edge([config.CLP_LOGIN, config.COGO_LOGIN], port)
-    print("Edge est ouvert sur les pages de connexion colruyt.be et Collect&Go.")
-    print("Connectez-vous dans les deux onglets (cochez « rester connecté » si proposé).")
-    input("Quand les deux sites affichent votre compte, appuyez sur Entrée… ")
-    store.save(read_cookies_over_cdp(port))
-    proc.terminate()
-    return store.summary()
+    proc = browser.launch(b, [config.CLP_LOGIN, config.COGO_LOGIN], port)
+    try:
+        user_agent = browser.devtools_version(port).get("User-Agent")
+        print(f"{b.family.title()} est ouvert ({b.path}) sur les pages de connexion colruyt.be et Collect&Go.")
+        print("Connectez-vous dans les deux onglets (cochez « rester connecté » si proposé).")
+        input("Quand les deux sites affichent votre compte, appuyez sur Entrée… ")
+        store.save(browser.read_cookies_and_close(port))
+        browser.remember(b, user_agent)
+    finally:
+        _stop(proc)
+    return store.summary() | {"browser": b.family}
 
 
 def silent_refresh(store: CookieStore, wait_s: int = 25) -> dict:
-    """Best effort: reopen the profile on both login URLs; the B2C SSO cookie (if still valid)
-    logs in without user action. Nothing is attached while pages load."""
+    """Best effort: reopen the profile used at login on both login URLs; the B2C SSO cookie (if still
+    valid) logs in without user action. Nothing is attached to the pages while they load."""
+    b = browser.find_browser()
     port = _free_port()
-    proc = launch_edge([config.CLP_LOGIN, config.COGO_LOGIN], port, minimized=True)
+    proc = browser.launch(b, [config.CLP_LOGIN, config.COGO_LOGIN], port, minimized=True)
     try:
+        user_agent = browser.devtools_version(port).get("User-Agent")
         time.sleep(wait_s)
-        store.save(read_cookies_over_cdp(port))
+        store.save(browser.read_cookies_and_close(port))
+        browser.remember(b, user_agent)
     finally:
-        proc.terminate()
-    return store.summary()
+        _stop(proc)
+    return store.summary() | {"browser": b.family}

@@ -17,8 +17,8 @@ the client; you always finish the order yourself on collectandgo.be.
 ## How it works
 
 - Runs on your machine, for your account only. Nothing is sent anywhere else.
-- **No credentials are handled.** You log in yourself, in a regular Microsoft Edge window with a
-  dedicated profile (SMS second factor included). The tool then reads the session cookies of
+- **No credentials are handled.** You log in yourself, in a regular browser window (Chrome, Edge or
+  Chromium) with a dedicated profile (SMS second factor included). The tool then reads the session cookies of
   that profile and replays them, the way your browser does.
 - It does not bypass the sites' bot protection. Automated browsers get blocked, so login is
   manual by design. If the sites block a request, the tool stops and reports it.
@@ -27,7 +27,7 @@ the client; you always finish the order yourself on collectandgo.be.
 
 ## Requirements
 
-- Windows with Microsoft Edge
+- Windows or Linux, with Google Chrome, Microsoft Edge or Chromium
 - [uv](https://docs.astral.sh/uv/)
 - A Colruyt Xtra account (Belgium)
 
@@ -41,7 +41,7 @@ uv sync
 uv run colruyt-mcp login
 ```
 
-1. Edge opens on the colruyt.be and Collect&Go login pages.
+1. Your browser opens on the colruyt.be and Collect&Go login pages.
 2. Log in on both tabs. Tick "stay signed in" if it is offered.
 3. Press Enter in the terminal.
 
@@ -55,12 +55,38 @@ uv run colruyt-mcp status
 uv run colruyt-mcp refresh
 ```
 
-`status` checks both sessions. `refresh` tries a silent re-login: it briefly opens Edge and reuses
+`status` checks both sessions. `refresh` tries a silent re-login: it briefly opens the browser used at login and reuses
 the Azure B2C single sign-on if it is still valid.
 
 Personal files live outside the repository, in `~/.colruyt-mcp/` (override with
-`COLRUYT_MCP_HOME`): `cookies.json` and `edge-profile/`. Keep them private: they give access to
+`COLRUYT_MCP_HOME`): `cookies.json`, `browser.json` and `<browser>-profile/`. Keep them private: they give access to
 your account.
+
+### Choosing the browser
+
+Without a choice, the tool looks for Edge, then Chrome, then Chromium on Windows. On Linux it
+looks for `google-chrome`, then `chromium`, then `microsoft-edge`. To pick one:
+
+```bash
+uv run colruyt-mcp login --browser chrome
+```
+
+`--browser` accepts `chrome`, `edge`, `chromium` or the path to the executable. The
+`COLRUYT_MCP_BROWSER` environment variable does the same. The browser used at login is
+remembered: `refresh` reuses it with the same profile.
+
+- Each browser gets its own profile, so switching browser means logging in again.
+- Close any window already using the colruyt-mcp profile before `login` or `refresh`.
+- Linux with snap Chromium: snap confinement hides dot-directories in your home. Set
+  `COLRUYT_MCP_HOME` to a non-hidden folder (e.g. `~/colruyt-mcp-data`), or use the `.deb`
+  Google Chrome.
+
+### Session lifetime
+
+Collect&Go sessions expire after a period of inactivity (about half an hour in our tests).
+colruyt.be sessions last much longer. When a session has expired, the assistant calls
+`refresh_session`. This reopens the browser for a few seconds and reconnects through single
+sign-on, without a new SMS code, as long as the single sign-on session is still valid.
 
 ## Connect it to Claude
 
@@ -73,6 +99,9 @@ Claude completely and restart it:
   "args": ["run", "--directory", "C:\\path\\to\\colruyt-mcp", "colruyt-mcp"]
 }
 ```
+
+On Linux, use the full path of `uv` (e.g. `/home/<you>/.local/bin/uv`) and a Linux path for
+`--directory`.
 
 **Claude Code:**
 

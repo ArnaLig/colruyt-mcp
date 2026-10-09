@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import httpx
 
 from . import config
+from .browser import saved_user_agent
 from .session import CookieStore
 
 # The MCP must never place or pay an order: refuse these paths whatever the caller asks.
@@ -370,7 +371,7 @@ class ColruytClient:
         self.store = store or CookieStore()
         self.http = httpx.AsyncClient(
             timeout=30, follow_redirects=False, cookies=self.store.to_jar(),
-            headers={"User-Agent": config.USER_AGENT, "Accept-Language": f"{lang}-BE,{lang};q=0.9"},
+            headers={"User-Agent": saved_user_agent() or config.USER_AGENT, "Accept-Language": f"{lang}-BE,{lang};q=0.9"},
         )
         self.clp = ClpBff(self.http, self.store, lang)
         self.cogo = Cogo(self.http, self.store, lang)
