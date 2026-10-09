@@ -1,5 +1,4 @@
 """MCP server (stdio) exposing Colruyt Xtra / Collect&Go tools. Never places an order."""
-import asyncio
 from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
@@ -9,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .client import ColruytClient, ColruytError
 from .logic import Service
-from .session import CookieStore, silent_refresh
+from .session import CookieStore
 
 INSTRUCTIONS = """\
 Outils Colruyt : catalogue, recettes (dont favoris), liste Xtra (colruyt.be) et panier Collect&Go.
@@ -21,8 +20,14 @@ Outils Colruyt : catalogue, recettes (dont favoris), liste Xtra (colruyt.be) et 
   get_cart / get_xtra_list pour vérifier le résultat, surtout après plusieurs ajouts.
 - Frais de service : list_service_fee_actions / service_fee_progress. Si un seuil est proche,
   proposez les produits de l'action. Vérifiez service_fee_discount dans get_cart.
-- Si une session est expirée : refresh_session ; si ça échoue, demandez à l'utilisateur de lancer
-  `colruyt-mcp login` dans un terminal (connexion manuelle + SMS).
+- Sessions :
+  - colruyt.be (liste Xtra, recettes, catalogue, historique) n'ouvre jamais de navigateur : son
+    cookie dure environ 60 jours (voir colruyt_days_left dans session_status).
+  - Collect&Go (panier, enlèvement, créneau, frais de service) expire après ~30 min d'inactivité.
+    Le MCP la renouvelle seul au besoin : le navigateur s'ouvre réduit quelques secondes, sans SMS.
+    Prévenez l'utilisateur que ça peut arriver.
+  - Si une erreur de session persiste, demandez à l'utilisateur de lancer `colruyt-mcp login` dans
+    un terminal (connexion manuelle + SMS). N'appelez pas refresh_session en boucle.
 """
 
 mcp = MCPServer("colruyt", instructions=INSTRUCTIONS)
@@ -71,12 +76,16 @@ async def session_status() -> dict:
 
 
 @mcp.tool(annotations=WRITE)
-async def refresh_session() -> dict:
-    """Tente une reconnexion silencieuse (profil Edge + SSO). Ouvre brièvement Edge."""
+async def refresh_session(site: Literal["collect_and_go", "colruyt", "all"] = "collect_and_go") -> dict:
+    """Reconnexion par le navigateur du login (SSO, sans SMS), qui s'ouvre réduit quelques secondes.
+    Rarement utile : Collect&Go se renouvelle déjà automatiquement, et le cookie colruyt.be dure ~60 jours."""
     svc = service()
-    summary = await asyncio.to_thread(silent_refresh, svc.c.store)
-    svc.c.reload_cookies()
-    return {"cookies": summary, "status": await run(svc.session_status())}
+    sites = {"collect_and_go": ("cogo",), "colruyt": ("colruyt",), "all": ("colruyt", "cogo")}[site]
+    try:
+        result = await svc.c.refresh(sites)
+    except Exception as exc:  # no browser, profile already in use, ...
+        raise ToolError(f"Reconnexion impossible : {exc}") from exc
+    return {"refresh": result, "status": await run(svc.session_status())}
 
 
 # ------------------------------------------------------------------ catalogue

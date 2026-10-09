@@ -2,9 +2,13 @@
 
 Endpoints were mapped from the sites' own traffic while using them with a personal account.
 """
+import asyncio
 import html
 import json
+import logging
+import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -12,7 +16,9 @@ import httpx
 
 from . import config
 from .browser import saved_user_agent
-from .session import CookieStore
+from .session import CookieStore, silent_refresh
+
+log = logging.getLogger(__name__)
 
 # The MCP must never place or pay an order: refuse these paths whatever the caller asks.
 FORBIDDEN_PATH = re.compile(
@@ -27,10 +33,14 @@ class ColruytError(Exception):
 
 class SessionExpired(ColruytError):
     def __init__(self, site: str):
-        super().__init__(
-            f"Session {site} expirée ou absente. Lancez l'outil refresh_session, "
-            "ou `colruyt-mcp login` dans un terminal si la reconnexion silencieuse échoue."
-        )
+        if site == "Collect&Go":
+            hint = ("La reconnexion automatique a échoué ou a déjà été tentée il y a moins de 5 min. "
+                    "Réessayez plus tard, ou lancez `colruyt-mcp login` dans un terminal "
+                    "(connexion manuelle + SMS).")
+        else:
+            hint = ("Le cookie colruyt.be dure environ 60 jours : il a expiré ou la session a été fermée. "
+                    "Essayez refresh_session(site=\"all\"), sinon lancez `colruyt-mcp login`.")
+        super().__init__(f"Session {site} expirée ou absente. {hint}")
         self.site = site
 
 
@@ -213,17 +223,29 @@ class Cogo(_Base):
         self.lang = lang
         self.lang_id = config.COGO_LANG_ID[lang]
         self.params: dict | None = None
+        # Async callback returning True when it renewed the session (set by ColruytClient).
+        self.on_expired = None
 
-    async def bootstrap(self, force: bool = False) -> dict:
+    async def _load_params(self) -> dict:
+        resp = await self.http.get(config.COGO_HOME)
+        self.store.update_from_jar(self.http.cookies)
+        if resp.status_code in (403, 405):
+            raise BotBlocked(config.COGO_HOME, resp.status_code)
+        p = parse_wcparam(resp.text)
+        if resp.status_code == 401 or not p["loggedIn"] or not p["WCAuthToken"]:
+            raise SessionExpired("Collect&Go")
+        return p
+
+    async def bootstrap(self, force: bool = False, auto_refresh: bool = True) -> dict:
+        """Read WCParamJS. The Collect&Go server session expires after ~30 min of inactivity: when it
+        has, renew it once through the browser (single sign-on, no SMS) and try again."""
         if self.params is None or force:
-            resp = await self.http.get(config.COGO_HOME)
-            self.store.update_from_jar(self.http.cookies)
-            if resp.status_code in (403, 405):
-                raise BotBlocked(config.COGO_HOME, resp.status_code)
-            p = parse_wcparam(resp.text)
-            if resp.status_code == 401 or not p["loggedIn"] or not p["WCAuthToken"]:
-                raise SessionExpired("Collect&Go")
-            self.params = p
+            try:
+                self.params = await self._load_params()
+            except SessionExpired:
+                if not (auto_refresh and self.on_expired and await self.on_expired()):
+                    raise
+                self.params = await self._load_params()
         return self.params
 
     def gw(self, service: str, version: str) -> str:
@@ -366,8 +388,16 @@ class Cogo(_Base):
         return resp.text
 
 
+REFRESH_COOLDOWN_S = 300  # at most one automatic browser refresh every 5 minutes
+
+
 class ColruytClient:
-    def __init__(self, store: CookieStore | None = None, lang: str = config.LANG):
+    """colruyt.be (Xtra) never opens a browser: its cookie lasts about 60 days. Only Collect&Go, whose
+    server session times out after ~30 min of inactivity, triggers an automatic browser refresh, and
+    only when a Collect&Go call actually needs it."""
+
+    def __init__(self, store: CookieStore | None = None, lang: str = config.LANG,
+                 auto_refresh: bool | None = None, refresher=silent_refresh):
         self.store = store or CookieStore()
         self.http = httpx.AsyncClient(
             timeout=30, follow_redirects=False, cookies=self.store.to_jar(),
@@ -375,10 +405,45 @@ class ColruytClient:
         )
         self.clp = ClpBff(self.http, self.store, lang)
         self.cogo = Cogo(self.http, self.store, lang)
+        if auto_refresh is None:
+            auto_refresh = os.environ.get("COLRUYT_MCP_AUTO_REFRESH", "1") != "0"
+        self._refresher = refresher
+        self._refresh_lock = asyncio.Lock()
+        self._refresh_gen = 0
+        self._last_refresh = -REFRESH_COOLDOWN_S
+        self.last_refresh_result: dict | None = None
+        if auto_refresh:
+            self.cogo.on_expired = self.refresh_cogo
 
     def reload_cookies(self) -> None:
         self.http.cookies = self.store.to_jar()
         self.cogo.params = None
+
+    async def refresh(self, sites: tuple[str, ...]) -> dict:
+        """Browser refresh of `sites` (blocking work runs in a thread), then reload the cookies."""
+        result = await asyncio.to_thread(self._refresher, self.store, sites)
+        self.reload_cookies()
+        self._refresh_gen += 1
+        self.last_refresh_result = result
+        return result
+
+    async def refresh_cogo(self) -> bool:
+        """Automatic Collect&Go refresh. Concurrent callers share one attempt; True if a refresh ran
+        (by this caller or while it was waiting) and reconnected."""
+        gen = self._refresh_gen
+        async with self._refresh_lock:
+            if self._refresh_gen != gen:  # another caller refreshed while we waited: reuse its outcome
+                return bool(((self.last_refresh_result or {}).get("reconnected") or {}).get("cogo"))
+            if time.monotonic() - self._last_refresh < REFRESH_COOLDOWN_S:
+                return False
+            self._last_refresh = time.monotonic()
+            log.info("Session Collect&Go expirée : reconnexion via le navigateur")
+            try:
+                result = await self.refresh(("cogo",))
+            except Exception as exc:  # no browser, profile in use, ...
+                log.warning("Reconnexion Collect&Go impossible : %s", exc)
+                return False
+            return bool((result.get("reconnected") or {}).get("cogo"))
 
     async def aclose(self) -> None:
         await self.http.aclose()

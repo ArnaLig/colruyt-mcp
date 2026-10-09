@@ -83,10 +83,22 @@ remembered: `refresh` reuses it with the same profile.
 
 ### Session lifetime
 
-Collect&Go sessions expire after a period of inactivity (about half an hour in our tests).
-colruyt.be sessions last much longer. When a session has expired, the assistant calls
-`refresh_session`. This reopens the browser for a few seconds and reconnects through single
-sign-on, without a new SMS code, as long as the single sign-on session is still valid.
+The two sites behave very differently, and the tool treats them separately.
+
+- **colruyt.be / Xtra** (shopping list, recipes, catalogue, history): the session cookie is
+  persistent, about 60 days. These tools **never open a browser**; `session_status` shows the
+  expiry and warns under 7 days left.
+- **Collect&Go** (cart, pick-up, slots, service fee): the server session expires after about
+  half an hour of inactivity. When a Collect&Go tool hits an expired session, the tool renews it
+  automatically: the browser used at login opens minimised for a few seconds and reconnects
+  through single sign-on, **without a new SMS code**, as long as the single sign-on is still valid
+  (tick "stay signed in" at login so it is). At most one such refresh every 5 minutes.
+
+So a session that only uses Xtra tools never opens a browser at all. Set
+`COLRUYT_MCP_AUTO_REFRESH=0` to disable the automatic Collect&Go refresh; the assistant then asks
+you to run `refresh_session` instead. `refresh_session` takes a `site` (`collect_and_go` by
+default, `colruyt`, or `all`); it is rarely needed. If single sign-on has also expired, the
+browser shows the login form and you run `colruyt-mcp login` again.
 
 ## Connect it to Claude
 

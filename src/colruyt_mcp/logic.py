@@ -158,10 +158,17 @@ class Service:
         out = {"cookies": self.c.store.summary()}
         out["colruyt_be"] = await self.c.clp.auth_check()
         try:
-            await self.c.cogo.bootstrap(force=True)
+            # a status check must never open a browser
+            await self.c.cogo.bootstrap(force=True, auto_refresh=False)
             out["collect_and_go"] = True
         except ColruytError:
             out["collect_and_go"] = False
+            out["collect_and_go_note"] = ("Session expirée après inactivité : elle sera renouvelée "
+                                          "automatiquement au prochain outil Collect&Go.")
+        days = out["cookies"].get("colruyt_days_left")
+        if days is not None and days < 7:
+            out["colruyt_warning"] = (f"Le cookie colruyt.be expire dans {days} jour(s) : "
+                                      "prévoyez `colruyt-mcp login`.")
         return out
 
     # -- history

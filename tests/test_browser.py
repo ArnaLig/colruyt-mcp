@@ -60,3 +60,26 @@ def test_missing_browser_message(monkeypatch):
     fake_linux(monkeypatch, {})
     with pytest.raises(RuntimeError, match="COLRUYT_MCP_BROWSER"):
         browser.find_browser(platform="linux")
+
+
+def test_clear_restored_tabs_keeps_cookies(tmp_path):
+    default = tmp_path / "Default"
+    (default / "Sessions").mkdir(parents=True)
+    (default / "Sessions" / "Session_1").write_text("x")
+    (default / "Current Tabs").write_text("x")
+    (default / "Network").mkdir()
+    (default / "Network" / "Cookies").write_text("keep")
+    browser.clear_restored_tabs(tmp_path)
+    assert not (default / "Sessions").exists() and not (default / "Current Tabs").exists()
+    assert (default / "Network" / "Cookies").read_text() == "keep"
+
+
+def test_wait_for_tabs_ignores_restored_tabs():
+    start, landing = "https://www.collectandgo.be/login?x=1", "https://www.collectandgo.be/fr/home"
+    frames = iter([
+        [("old", landing), ("new", "https://www.collectandgo.be/login?x=1")],  # restored tab already home
+        [("old", landing), ("new", "https://login.myxtra.be/b2c")],
+    ])
+    landed = browser.wait_for_tabs(0, {"cogo": (start, landing)}, timeout_s=0, poll_s=0,
+                                   tabs=lambda port: next(frames))
+    assert landed == {"cogo": False}

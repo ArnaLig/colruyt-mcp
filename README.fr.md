@@ -72,11 +72,24 @@ mémorisé : `refresh` le réutilise, avec le même profil.
 
 ### Durée des sessions
 
-La session Collect&Go expire après une période d'inactivité (environ une demi-heure lors de nos
-tests). La session colruyt.be dure bien plus longtemps. Quand une session a expiré, l'assistant
-appelle `refresh_session` : le navigateur se rouvre quelques secondes et se reconnecte par
-l'authentification unique, sans nouveau code SMS, tant que cette authentification unique est
-encore valide.
+Les deux sites se comportent très différemment, et l'outil les traite séparément.
+
+- **colruyt.be / Xtra** (liste de courses, recettes, catalogue, historique) : le cookie de
+  session est persistant, environ 60 jours. Ces outils **n'ouvrent jamais de navigateur** ;
+  `session_status` affiche la date d'expiration et prévient sous 7 jours restants.
+- **Collect&Go** (panier, enlèvement, créneau, frais de service) : la session serveur expire
+  après environ une demi-heure d'inactivité. Quand un outil Collect&Go tombe sur une session
+  expirée, l'outil la renouvelle automatiquement : le navigateur du login s'ouvre réduit quelques
+  secondes et se reconnecte par l'authentification unique, **sans nouveau code SMS**, tant que
+  celle-ci est encore valide (cochez « rester connecté » au login pour qu'elle le soit). Au plus
+  une reconnexion toutes les 5 minutes.
+
+Une session qui n'utilise que des outils Xtra n'ouvre donc jamais de navigateur. Définissez
+`COLRUYT_MCP_AUTO_REFRESH=0` pour désactiver la reconnexion automatique de Collect&Go ;
+l'assistant demande alors de lancer `refresh_session`. Celui-ci prend un `site`
+(`collect_and_go` par défaut, `colruyt`, ou `all`) et sert rarement. Si l'authentification unique
+a aussi expiré, le navigateur affiche le formulaire de connexion et il faut relancer
+`colruyt-mcp login`.
 
 ## Brancher le MCP
 

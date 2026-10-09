@@ -63,10 +63,16 @@ class CookieStore:
             self.save(list(current.values()))
 
     def summary(self) -> dict:
-        names = {c["name"] for c in self.load()}
+        cookies = self.load()
+        names = {c["name"] for c in cookies}
+        clp = next((c for c in cookies if c["name"] == "clpbff_session"), None)
+        expires = clp.get("expires", -1) if clp else -1
         return {
             "file": str(self.path),
-            "colruyt_session": "clpbff_session" in names,
+            "colruyt_session": clp is not None,
+            # The colruyt.be session cookie is persistent (about 60 days): no browser needed until then.
+            "colruyt_expires": time.strftime("%Y-%m-%d", time.localtime(expires)) if expires > 0 else None,
+            "colruyt_days_left": max(0, int((expires - time.time()) // 86400)) if expires > 0 else None,
             "cogo_session": "JSESSIONID" in names and any(n.startswith("WC_AUTHENTICATION_") for n in names),
             "updated": time.strftime("%Y-%m-%d %H:%M", time.localtime(self.path.stat().st_mtime))
             if self.path.exists() else None,
@@ -103,17 +109,27 @@ def interactive_login(store: CookieStore, preference: str | None = None) -> dict
     return store.summary() | {"browser": b.family}
 
 
-def silent_refresh(store: CookieStore, wait_s: int = 25) -> dict:
-    """Best effort: reopen the profile used at login on both login URLs; the B2C SSO cookie (if still
-    valid) logs in without user action. Nothing is attached to the pages while they load."""
+# Login URL to open, and where the tab lands once single sign-on has logged the user in.
+REFRESH_TARGETS = {
+    "colruyt": (config.CLP_LOGIN, "https://www.colruyt.be/"),
+    "cogo": (config.COGO_LOGIN, "https://www.collectandgo.be/fr/home"),
+}
+
+
+def silent_refresh(store: CookieStore, sites: tuple[str, ...] = ("cogo",), timeout_s: float = 40) -> dict:
+    """Best effort: reopen the browser profile used at login on the login page of `sites`; the B2C
+    single sign-on cookie (if still valid) logs in without user action. Nothing is attached to the
+    pages while they load: progress is read from the local DevTools tab list, then cookies are read
+    once and the browser is closed."""
     b = browser.find_browser()
     port = _free_port()
-    proc = browser.launch(b, [config.CLP_LOGIN, config.COGO_LOGIN], port, minimized=True)
+    proc = browser.launch(b, [REFRESH_TARGETS[s][0] for s in sites], port, minimized=True)
     try:
         user_agent = browser.devtools_version(port).get("User-Agent")
-        time.sleep(wait_s)
+        landed = browser.wait_for_tabs(port, {s: REFRESH_TARGETS[s] for s in sites}, timeout_s)
         store.save(browser.read_cookies_and_close(port))
         browser.remember(b, user_agent)
     finally:
         _stop(proc)
-    return store.summary() | {"browser": b.family}
+    return store.summary() | {"browser": b.family, "reconnected": landed,
+                              "needs_manual_login": not all(landed.values())}

@@ -9,6 +9,8 @@ from .session import CookieStore, interactive_login, silent_refresh
 def main() -> None:
     parser = argparse.ArgumentParser(prog="colruyt-mcp")
     parser.add_argument("command", nargs="?", default="serve", choices=["serve", "login", "refresh", "status"])
+    parser.add_argument("--site", choices=["cogo", "colruyt", "all"], default="all",
+                        help="refresh : site(s) à reconnecter (défaut : all)")
     parser.add_argument("--browser", help="login: edge | chrome | chromium | chemin de l'exécutable "
                                           "(par défaut : celui du dernier login, sinon détection automatique)")
     args = parser.parse_args()
@@ -20,7 +22,8 @@ def main() -> None:
     elif cmd == "login":
         print(json.dumps(interactive_login(store, args.browser), indent=1, ensure_ascii=False))
     elif cmd == "refresh":
-        print(json.dumps(silent_refresh(store), indent=1, ensure_ascii=False))
+        sites = ("colruyt", "cogo") if args.site == "all" else (args.site,)
+        print(json.dumps(silent_refresh(store, sites), indent=1, ensure_ascii=False))
     else:
         from .client import ColruytClient
         from .logic import Service
